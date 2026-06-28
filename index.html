@@ -11,6 +11,7 @@
   <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-storage-compat.js"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f5f5f5; color: #1a1a1a; min-height: 100vh; }
@@ -319,6 +320,7 @@
     <button class="main-tab" onclick="showMain('produccion')">Producción</button>
     <button class="main-tab" onclick="showMain('presupuestos')">Presupuestos</button>
     <button class="main-tab" onclick="showMain('stock')">Stock</button>
+    <button class="main-tab" onclick="showMain('descargas')">Descargas</button>
   </div>
 
   <!-- ── COSTOS ── -->
@@ -692,7 +694,33 @@
     </div>
   </div><!-- /stock -->
 
-</div></div><!-- /app /screen-owner -->
+</div><!-- /app -->
+
+  <!-- ── DESCARGAS ── -->
+  <div id="main-descargas" class="main-section" style="padding:0 16px">
+    <div class="card">
+      <div class="card-header"><span class="card-title">Subir documento</span></div>
+      <label>Categoría</label>
+      <select id="desc-categoria" style="width:100%;padding:9px 10px;border:1px solid #ddd;border-radius:8px;font-family:inherit;font-size:14px;background:#fff;margin-bottom:10px">
+        <option value="Catálogo">Catálogo</option>
+        <option value="Lista de precios">Lista de precios</option>
+        <option value="Instructivo">Instructivo</option>
+        <option value="Manual">Manual</option>
+        <option value="Otro">Otro</option>
+      </select>
+      <label>Nombre del documento</label>
+      <input type="text" id="desc-nombre" placeholder="Ej: Catálogo 2026" style="margin-bottom:10px" />
+      <label>Archivo PDF</label>
+      <input type="file" id="desc-archivo" accept=".pdf" style="margin-bottom:10px" />
+      <div id="desc-progreso" style="display:none;background:#f0f7f0;border-radius:8px;padding:10px;margin-bottom:10px;text-align:center;font-size:13px;color:#2d6a2d"></div>
+      <div class="actions">
+        <button class="btn btn-primary" onclick="descSubir()" style="flex:1;padding:13px;font-size:16px"><i class="ti ti-upload"></i> Subir</button>
+      </div>
+    </div>
+    <div id="descargas-lista"><div class="empty">Cargando documentos...</div></div>
+  </div><!-- /descargas -->
+
+</div><!-- /screen-owner -->
 
 <!-- Modal convertir presupuesto en pedido -->
 <div id="ped-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:999;display:none;align-items:center;justify-content:center;padding:20px">
@@ -875,14 +903,15 @@ function endOfWeek(d)   { const dt=new Date(d+'T12:00:00'); dt.setDate(dt.getDat
 
 // ── NAVEGACIÓN ────────────────────────────────────────────────
 function showMain(tab) {
-  document.querySelectorAll('.main-tab').forEach((b,i)=>b.classList.toggle('active',['costos','gastos','produccion','presupuestos','stock'][i]===tab));
+  document.querySelectorAll('.main-tab').forEach((b,i)=>b.classList.toggle('active',['costos','gastos','produccion','presupuestos','stock','descargas'][i]===tab));
   document.querySelectorAll('.main-section').forEach(s=>s.classList.remove('active'));
   document.getElementById('main-'+tab).classList.add('active');
   if(tab==='presupuestos') ptoInit();
   if(tab==='stock') { renderOwnerStock(); renderOwnerPedidos(); renderCola(); }
+  if(tab==='descargas') renderDescargas();
 }
 function showSub(main, sub) {
-  const MAP = { costos:['materiales','operarios','productos','calcular'], gastos:['cargar','lista','analisis'], produccion:['carga','resumen'], presupuestos:['nuevo','historial'], stock:['stock','materiasprimas','pedidos','cola'] };
+  const MAP = { costos:['materiales','operarios','productos','calcular'], gastos:['cargar','lista','analisis'], produccion:['carga','resumen'], presupuestos:['nuevo','historial'], stock:['stock','materiasprimas','pedidos','cola'], descargas:[] };
   const parent = document.getElementById('main-'+main);
   parent.querySelectorAll('.sub-tab').forEach((b,i)=>b.classList.toggle('active', MAP[main][i]===sub));
   parent.querySelectorAll('.sub-section').forEach(s=>s.classList.remove('active'));
@@ -2461,6 +2490,77 @@ function renderCola() {
   renderColaEn(el);
 }
 
+// ── DESCARGAS ─────────────────────────────────────────────────
+const storage = firebase.storage();
+
+async function descSubir() {
+  const nombre = document.getElementById('desc-nombre').value.trim();
+  const categoria = document.getElementById('desc-categoria').value;
+  const archivo = document.getElementById('desc-archivo').files[0];
+  if (!nombre) { alert('Ingresá un nombre para el documento'); return; }
+  if (!archivo) { alert('Seleccioná un archivo PDF'); return; }
+  const progreso = document.getElementById('desc-progreso');
+  progreso.style.display = 'block';
+  progreso.textContent = 'Subiendo...';
+  try {
+    const ref = storage.ref(`documentos/${Date.now()}_${archivo.name}`);
+    const task = ref.put(archivo);
+    task.on('state_changed', snap => {
+      const pct = Math.round(snap.bytesTransferred / snap.totalBytes * 100);
+      progreso.textContent = `Subiendo... ${pct}%`;
+    });
+    await task;
+    const url = await ref.getDownloadURL();
+    await db.collection('documentos').add({
+      nombre, categoria, url,
+      nombreArchivo: archivo.name,
+      fecha: new Date().toISOString(),
+      subidoPor: auth.currentUser?.email || ''
+    });
+    progreso.textContent = '¡Subido correctamente!';
+    document.getElementById('desc-nombre').value = '';
+    document.getElementById('desc-archivo').value = '';
+    setTimeout(() => { progreso.style.display = 'none'; }, 2000);
+  } catch(e) {
+    progreso.textContent = 'Error al subir: ' + e.message;
+  }
+}
+
+async function descEliminar(id, url) {
+  if (!confirm('¿Eliminar este documento?')) return;
+  await db.collection('documentos').doc(id).delete();
+  try { await storage.refFromURL(url).delete(); } catch(e) {}
+}
+
+async function renderDescargas() {
+  const el = document.getElementById('descargas-lista'); if (!el) return;
+  el.innerHTML = '<div class="empty">Cargando...</div>';
+  const snap = await db.collection('documentos').orderBy('fecha', 'desc').get();
+  if (snap.empty) { el.innerHTML = '<div class="empty">No hay documentos subidos aún.</div>'; return; }
+  const categorias = {};
+  snap.docs.forEach(d => {
+    const doc = { id: d.id, ...d.data() };
+    if (!categorias[doc.categoria]) categorias[doc.categoria] = [];
+    categorias[doc.categoria].push(doc);
+  });
+  el.innerHTML = Object.entries(categorias).map(([cat, docs]) => `
+    <div style="margin-bottom:18px">
+      <div style="font-size:12px;font-weight:600;color:#aaa;text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px">${cat}</div>
+      ${docs.map(doc => `
+        <div class="card" style="padding:12px 16px;display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+          <div>
+            <div style="font-weight:500;font-size:14px"><i class="ti ti-file-type-pdf" style="color:#e55;margin-right:6px"></i>${doc.nombre}</div>
+            <div style="font-size:11px;color:#aaa;margin-top:2px">${fmtFecha(doc.fecha.slice(0,10))} · ${doc.subidoPor}</div>
+          </div>
+          <div style="display:flex;gap:8px">
+            <a href="${doc.url}" target="_blank" download class="btn btn-sm btn-primary" style="text-decoration:none"><i class="ti ti-download"></i></a>
+            <button class="btn btn-sm" onclick="descEliminar('${doc.id}','${doc.url}')" style="color:#e55;border-color:#e55"><i class="ti ti-trash"></i></button>
+          </div>
+        </div>`).join('')}
+    </div>`).join('');
+}
+
+// ── EMPLEADO STOCK MATERIAS PRIMAS ────────────────────────────
 function empRenderStockMateriales() {
   const el = document.getElementById('emp-stock-materiales-lista'); if(!el) return;
   const sel = document.getElementById('emp-mat-stock-select');
